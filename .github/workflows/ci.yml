@@ -1,0 +1,100 @@
+name: CI - K8s YAML + Smoke test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  validate-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ---------- (Opcional) Validaciones Terraform si incluyes terraform-k8s ----------
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.1
+      - name: Terraform fmt (check)
+        if: hashFiles('terraform-k8s/**.tf') != ''
+        working-directory: ./terraform-k8s
+        run: terraform fmt -check
+        continue-on-error: true
+      - name: Terraform init
+        if: hashFiles('terraform-k8s/**.tf') != ''
+        working-directory: ./terraform-k8s
+        run: terraform init -input=false
+        continue-on-error: true
+      - name: Terraform validate
+        if: hashFiles('terraform-k8s/**.tf') != ''
+        working-directory: ./terraform-k8s
+        run: terraform validate
+        continue-on-error: true
+
+      # ---------- Validación de manifiestos (kubeval simple) ----------
+      - name: Install kubeval
+        run: |
+          curl -L -o kubeval.tar.gz https://github.com/instrumenta/kubeval/releases/download/0.16.1/kubeval-linux-amd64.tar.gz
+          tar -xzf kubeval.tar.gz
+          sudo mv kubeval /usr/local/bin/kubeval
+      - name: Validate k8s manifests
+        run: kubeval --strict --ignore-missing-schemas k8s-yaml/*.yaml
+
+      # ---------- Crear clúster KinD efímero ----------
+      - name: Create KinD cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: ci-kind
+          version: v1.30.0
+
+      - name: kubectl sanity
+        run: kubectl get nodes -o wide
+
+      # ---------- Aplicar manifiestos ----------
+      - name: Apply Namespace
+        run: kubectl apply -f k8s-yaml/ns.yaml
+      - name: Apply Deployment
+        run: kubectl apply -f k8s-yaml/deploy.yaml
+      - name: Apply Service
+        run: kubectl apply -f k8s-yaml/svc.yaml
+
+      # ---------- Esperar rollout ----------
+      - name: Wait for rollout
+        run: kubectl -n yaml-demo rollout status deploy/nginx-deploy --timeout=120s
+
+      # ---------- Smoke test (HTTP 200) con port-forward ----------
+      - name: Port-forward & curl
+        run: |
+          kubectl -n yaml-demo port-forward svc/nginx-svc 8080:80 >/tmp/pf.log 2>&1 &
+          PF_PID=$!
+          sleep 3
+          CODE=$(curl -s -o /tmp/index.html -w "%{http_code}" http://127.0.0.1:8080 || true)
+          kill $PF_PID || true
+          echo "$CODE" > /tmp/http_code.txt
+          if [ "$CODE" != "200" ]; then
+            echo "Smoke test failed (HTTP $CODE)"
+            exit 1
+          fi
+
+      # ---------- Artefactos para debug (si falla ayuda mucho) ----------
+      - name: Collect logs
+        if: always()
+        run: |
+          mkdir -p artifacts
+          kubectl -n yaml-demo get all -o wide > artifacts/get_all.txt
+          kubectl -n yaml-demo describe deploy/nginx-deploy > artifacts/describe_deploy.txt
+          kubectl -n yaml-demo logs -l app=nginx-demo --tail=200 --all-containers=true > artifacts/pods_logs.txt
+          cat /tmp/http_code.txt > artifacts/http_code.txt || true
+          cat /tmp/index.html > artifacts/index.html || true
+          cat /tmp/pf.log > artifacts/portforward.log || true
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k8s-ci-artifacts
+          path: artifacts/
