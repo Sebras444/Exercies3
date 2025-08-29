@@ -14,31 +14,7 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      # ---------- (Opcional) Validaciones Terraform si incluyes terraform-k8s ----------
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.13.1
-
-      - name: Terraform fmt (check)
-        if: hashFiles('terraform-k8s/**.tf') != ''
-        working-directory: ./terraform-k8s
-        run: terraform fmt -check
-        continue-on-error: true
-
-      - name: Terraform init
-        if: hashFiles('terraform-k8s/**.tf') != ''
-        working-directory: ./terraform-k8s
-        run: terraform init -input=false
-        continue-on-error: true
-
-      - name: Terraform validate
-        if: hashFiles('terraform-k8s/**.tf') != ''
-        working-directory: ./terraform-k8s
-        run: terraform validate
-        continue-on-error: true
-
+        
       # ---------- Validación de manifiestos (Kubeconform) ----------
       - name: Install kubeconform
         run: |
