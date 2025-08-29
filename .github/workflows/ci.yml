@@ -51,8 +51,6 @@ jobs:
 
       - name: Validate k8s manifests (kubeconform)
         run: |
-          # --strict: falla con errores de esquema
-          # --ignore-missing-schemas: ignora CRDs que no estén en el registry
           kubeconform --strict --ignore-missing-schemas \
             -kubernetes-version 1.30.0 \
             k8s-yaml/*.yaml
@@ -62,11 +60,14 @@ jobs:
         uses: helm/kind-action@v1
         with:
           cluster_name: ci-kind
-          version: v1.30.0
+          node_image: kindest/node:v1.30.0   # <-- versión de Kubernetes
+          wait: 120s
+          verbosity: 1
 
       - name: kubectl sanity
         run: |
           kubectl version --client
+          kubectl cluster-info
           kubectl get nodes -o wide
 
       # ---------- Aplicar manifiestos ----------
@@ -89,7 +90,6 @@ jobs:
           set -e
           kubectl -n yaml-demo port-forward svc/nginx-svc 8080:80 >/tmp/pf.log 2>&1 &
           PF_PID=$!
-          # esperar a que el port-forward quede listo y la app responda
           for i in {1..10}; do
             sleep 1
             curl -fsS http://127.0.0.1:8080 >/tmp/index.html && break || true
